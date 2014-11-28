@@ -184,7 +184,7 @@ int main(int argc, char * argv[])
   sem_init(&blocking_waiter, 0, 0);
   copy_regular(argv[1], argv[2]);
   uint64_t i;
-  while (i = 0; i < num_requests; ++i) {
+  for (i = 0; i < num_requests; ++i) {
     sem_wait(&blocking_waiter);
   }
   sem_destroy(&blocking_waiter);
