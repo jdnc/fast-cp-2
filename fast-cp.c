@@ -45,15 +45,15 @@ void aio_read_handler (sigval_t  sigval)
   nbytes = aio_return(hctx->m_aiocb);
   int i = 0;
   void * buffer = (void *)hctx->m_aiocb->aio_buf;
-  w_nbytes = pwrite(hctx->m_dst_fd, buffer, nbytes, hctx->m_offset);
+  /*w_nbytes = pwrite(hctx->m_dst_fd, buffer, nbytes, hctx->m_offset);
   if (w_nbytes != nbytes) {
     perror("sync write error");
     exit(-1);
-  }
-  sem_post(&blocking_waiter);
+    }
+    sem_post(&blocking_waiter);*/
   // now send an async write request for the destination file
   // init aiocb struct
-  /*struct aiocb*  w_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
+  struct aiocb*  w_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
   handler_context* w_context = (handler_context *) malloc(sizeof(handler_context));
   bzero ((char *)w_context, sizeof(handler_context));
   bzero ((char *)w_aiocb, sizeof(struct aiocb));
@@ -76,13 +76,12 @@ void aio_read_handler (sigval_t  sigval)
   w_aiocb->aio_sigevent.sigev_notify_attributes = NULL;
   w_aiocb->aio_sigevent.sigev_value.sival_ptr = (void *)w_context;
 
-  sem_post(&blocking_waiter);
-
   if (aio_write(w_aiocb) < 0) {
     perror("aio_write error");
     exit(-1);
   }
-  ++num_requests;*/
+  ++num_requests;
+  sem_post(&blocking_waiter);
 }
 
 void aio_write_handler (sigval_t sigval)
