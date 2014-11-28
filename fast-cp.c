@@ -43,37 +43,35 @@ void aio_read_handler (sigval_t  sigval)
   }
   nbytes = aio_return(hctx->m_aiocb);
   int i = 0;
-  for (i = 0; i< nbytes; ++i) {
-    printf("%s", hctx->m_aiocb->aio_buf);
-  }
+  void * buffer = (void *)hctx->m_aiocb->aio_buf;
   // now send an async write request for the destination file
   // init aiocb struct
-  struct aiocb w_aiocb;
-  handler_context w_context;
-  bzero ((char *)&w_context, sizeof(handler_context));
-  bzero ((char *)&w_aiocb, sizeof(struct aiocb));
+  struct aiocb*  w_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
+  handler_context* w_context = (handler_context *) malloc(sizeof(handler_context));
+  bzero ((char *)w_context, sizeof(handler_context));
+  bzero ((char *)w_aiocb, sizeof(struct aiocb));
   // context to be passed to handler
-  w_context.m_aiocb = &w_aiocb;
-  w_context.m_offset = hctx->m_offset;
-  w_context.m_file_size = hctx->m_file_size;
-  w_context.m_src_fd = hctx->m_src_fd;
-  w_context.m_dst_fd = hctx->m_dst_fd;
+  w_context->m_aiocb = w_aiocb;
+  w_context->m_offset = hctx->m_offset;
+  w_context->m_file_size = hctx->m_file_size;
+  w_context->m_src_fd = hctx->m_src_fd;
+  w_context->m_dst_fd = hctx->m_dst_fd;
 
   // basic setup
-  w_aiocb.aio_fildes = hctx->m_dst_fd;
-  w_aiocb.aio_nbytes = nbytes;
-  w_aiocb.aio_offset = hctx->m_offset;
-  w_aiocb.aio_buf = hctx->m_aiocb->aio_buf;
+  w_aiocb->aio_fildes = hctx->m_dst_fd;
+  w_aiocb->aio_nbytes = nbytes;
+  w_aiocb->aio_offset = hctx->m_offset;
+  w_aiocb->aio_buf = buffer;
 
   // thread callback
-  w_aiocb.aio_sigevent.sigev_notify = SIGEV_THREAD;
-  w_aiocb.aio_sigevent.sigev_notify_function = aio_write_handler;
-  w_aiocb.aio_sigevent.sigev_notify_attributes = NULL;
-  w_aiocb.aio_sigevent.sigev_value.sival_ptr = (void *)&w_context;
+  w_aiocb->aio_sigevent.sigev_notify = SIGEV_THREAD;
+  w_aiocb->aio_sigevent.sigev_notify_function = aio_write_handler;
+  w_aiocb->aio_sigevent.sigev_notify_attributes = NULL;
+  w_aiocb->aio_sigevent.sigev_value.sival_ptr = (void *)w_context;
 
   sem_post(&blocking_waiter);
 
-  if (aio_write(&w_aiocb) < 0) {
+  if (aio_write(w_aiocb) < 0) {
     perror("aio_write error");
     exit(-1);
   }
@@ -135,30 +133,30 @@ int copy_regular (const char* src, const char* dst)
   size_t i;
   for (i = 0; i < stat_buf.st_size; i += buffer_size) {
     // init aiocb struct
-    struct aiocb r_aiocb;
-    handler_context r_context;
-    bzero ((char *)&r_context, sizeof(handler_context));
-    bzero ((char *)&r_aiocb, sizeof(struct aiocb));
+    struct aiocb* r_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
+    handler_context* r_context = (handler_context *) malloc(sizeof(handler_context));
+    bzero ((char *)r_context, sizeof(handler_context));
+    bzero ((char *)r_aiocb, sizeof(struct aiocb));
     // context to be passed to handler
-    r_context.m_aiocb = &r_aiocb;
-    r_context.m_offset = i;
-    r_context.m_file_size = stat_buf.st_size;
-    r_context.m_src_fd = src_fd;
-    r_context.m_dst_fd = dst_fd;
+    r_context->m_aiocb = r_aiocb;
+    r_context->m_offset = i;
+    r_context->m_file_size = stat_buf.st_size;
+    r_context->m_src_fd = src_fd;
+    r_context->m_dst_fd = dst_fd;
     
     // basic setup
-    r_aiocb.aio_fildes = src_fd;
-    r_aiocb.aio_nbytes = buffer_size;
-    r_aiocb.aio_offset = i;
-    r_aiocb.aio_buf = buffer_block;
+    r_aiocb->aio_fildes = src_fd;
+    r_aiocb->aio_nbytes = buffer_size;
+    r_aiocb->aio_offset = i;
+    r_aiocb->aio_buf = buffer_block;
     
     // thread callback
-    r_aiocb.aio_sigevent.sigev_notify = SIGEV_THREAD;
-    r_aiocb.aio_sigevent.sigev_notify_function = aio_read_handler;
-    r_aiocb.aio_sigevent.sigev_notify_attributes = NULL;
-    r_aiocb.aio_sigevent.sigev_value.sival_ptr = (void *)&r_context;
+    r_aiocb->aio_sigevent.sigev_notify = SIGEV_THREAD;
+    r_aiocb->aio_sigevent.sigev_notify_function = aio_read_handler;
+    r_aiocb->aio_sigevent.sigev_notify_attributes = NULL;
+    r_aiocb->aio_sigevent.sigev_value.sival_ptr = (void *)r_context;
 
-    if (aio_read(&r_aiocb) < 0) {
+    if (aio_read(r_aiocb) < 0) {
       perror("aio_read error");
       exit(-1);
     }
@@ -184,9 +182,9 @@ int main(int argc, char * argv[])
   sem_init(&blocking_waiter, 0, 0);
   copy_regular(argv[1], argv[2]);
   uint64_t i;
-  for (i = 0; i < num_requests; ++i) {
+  /*for (i = 0; i < num_requests; ++i) {
     sem_wait(&blocking_waiter);
-  }
+    }*/
   sem_destroy(&blocking_waiter);
   return 0;
 }
