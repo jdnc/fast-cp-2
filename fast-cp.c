@@ -86,9 +86,9 @@ void aio_write_handler (sigval_t sigval)
     perror("write aio error");
     exit(-1);
   }
-  free(hctx->m_aiocb->aio_buf);
   nbytes = aio_return(hctx->m_aiocb);
   sem_post(&blocking_waiter);
+  //free(hctx->m_aiocb->aio_buf);
 }
 
 int copy_regular (const char* src, const char* dst)
@@ -182,9 +182,9 @@ int main(int argc, char * argv[])
   sem_init(&blocking_waiter, 0, 0);
   copy_regular(argv[1], argv[2]);
   uint64_t i;
-  /*for (i = 0; i < num_requests; ++i) {
+  for (i = 0; i < num_requests; ++i) {
     sem_wait(&blocking_waiter);
-    }*/
+  }
   sem_destroy(&blocking_waiter);
   return 0;
 }
