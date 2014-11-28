@@ -122,7 +122,7 @@ int copy_regular (const char* src, const char* dst)
     exit(-1);
   }
   // TODO tell the kernel that we will need the input file
-  
+  posix_fadvise(src_fd, 0, stat_buf.st_size, POSIX_FADV_WILLNEED);
   // more efficient space allocation via fallocate for dst file
   if (fallocate(dst_fd, 0, 0, stat_buf.st_size) < 0) {
     perror("destination file fallocate");
@@ -133,7 +133,8 @@ int copy_regular (const char* src, const char* dst)
   // now start sending aio read requests
   size_t i;
   for (i = 0; i < stat_buf.st_size; i += buffer_size) {
-     buffer_block = (void *)malloc(buffer_size);
+    //posix_fadvise(src_fd, i, buffer_size, POSIX_FADV_SEQUENTIAL);
+    buffer_block = (void *)malloc(buffer_size);
      if (errno == ENOMEM) {
        perror("malloc for buffer error");
        exit(-1);
