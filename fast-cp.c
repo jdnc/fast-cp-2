@@ -36,6 +36,7 @@ typedef struct handler_context
 void aio_read_handler (sigval_t  sigval)
 {
   size_t nbytes;
+  size_t w_nbytes = 0;
   handler_context* hctx = (handler_context*)sigval.sival_ptr;
   if (aio_error(hctx->m_aiocb)) {
     perror("read aio error");
@@ -44,9 +45,15 @@ void aio_read_handler (sigval_t  sigval)
   nbytes = aio_return(hctx->m_aiocb);
   int i = 0;
   void * buffer = (void *)hctx->m_aiocb->aio_buf;
+  w_nbytes = pwrite(hctx->m_dst_fd, buffer, nbytes, hctx->m_offset);
+  if (w_nbytes != nbytes) {
+    perror("sync write error");
+    exit(-1);
+  }
+  sem_post(&blocking_waiter);
   // now send an async write request for the destination file
   // init aiocb struct
-  struct aiocb*  w_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
+  /*struct aiocb*  w_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
   handler_context* w_context = (handler_context *) malloc(sizeof(handler_context));
   bzero ((char *)w_context, sizeof(handler_context));
   bzero ((char *)w_aiocb, sizeof(struct aiocb));
@@ -75,7 +82,7 @@ void aio_read_handler (sigval_t  sigval)
     perror("aio_write error");
     exit(-1);
   }
-  ++num_requests;
+  ++num_requests;*/
 }
 
 void aio_write_handler (sigval_t sigval)
@@ -124,14 +131,14 @@ int copy_regular (const char* src, const char* dst)
   // decide the number of pages in the input file and malloc a buffer accordingly
   num_pages = stat_buf.st_size / page_size + 1;
   buffer_size = page_size; //(num_pages < BUF_MAX) ? (num_pages * page_size) : (BUF_MAX * page_size);
-  buffer_block = (void *)malloc(buffer_size);
-  if (errno == ENOMEM) {
-    perror("malloc for buffer error");
-    exit(-1);
-  }
   // now start sending aio read requests
   size_t i;
   for (i = 0; i < stat_buf.st_size; i += buffer_size) {
+     buffer_block = (void *)malloc(buffer_size);
+     if (errno == ENOMEM) {
+       perror("malloc for buffer error");
+       exit(-1);
+     }
     // init aiocb struct
     struct aiocb* r_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
     handler_context* r_context = (handler_context *) malloc(sizeof(handler_context));
