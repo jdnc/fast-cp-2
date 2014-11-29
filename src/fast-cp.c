@@ -131,7 +131,7 @@ int copy_regular (const char* src_file, const char* dst_file)
   }
   // open the destination file for writing
   if ((dst_fd = open(dst_file, O_WRONLY| O_CREAT, stat_buf.st_mode)) < 0) {
-    std::cout << "file " <<dst_file<<std::endl;
+    //std::cout << "file " <<dst_file<<std::endl;
     perror("destination file open error");
     exit(-1);
   }
@@ -205,7 +205,7 @@ std::string split_filename(std::string fname, int depth)
   for (uint64_t i = 0; i < depth; ++i){
     pos = fname.find_last_of("/\\", pos -1);
   }
-  std::cout << "split " << fname.substr(pos) << std::endl;
+  // std::cout << "split " << fname.substr(pos) << std::endl;
   return fname.substr(pos);
 }
 
@@ -281,7 +281,7 @@ int main(int argc, char * argv[])
       }
       // dir -> dir
       dst.append(split_filename(src, 1));
-      std::cout <<"dst " << dst << "\n";
+      //std::cout <<"dst " << dst << "\n";
       if (mkdir(dst.c_str(),  S_IRWXU | S_IRWXG)) {
 	perror("destination mkdir failed");
 	exit(-1);
