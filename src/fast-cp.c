@@ -48,7 +48,7 @@ typedef struct data_obj
 
 void * read_queue(void *) 
 {
-  std::cout << "in read q" << std::endl;
+  //std::cout << "in read q" << std::endl;
   int rc;
   int first_time = 1;
   sem_wait(&read_blocking_waiter);
@@ -74,7 +74,7 @@ void * read_queue(void *)
     w_data->m_dst_fd = data->m_dst_fd;      
     io_prep_pwrite(w_iocb, data->m_dst_fd, cb->u.c.buf, cb->u.c.nbytes, data->m_offset);
     w_iocb->data = w_data;
-    std::cout << "buffer " << std::string((char*)cb->u.c.buf) << std::endl;
+    //std::cout << "buffer " << std::string((char*)cb->u.c.buf) << std::endl;
     if ((io_submit(write_context, 1, &w_iocb)) < 1) {
       perror("write io submit error");
       exit(-1);
@@ -95,7 +95,7 @@ void * read_queue(void *)
 
 void * write_queue(void *)
 {
-  std::cout << "in write q" << std::endl;
+  //std::cout << "in write q" << std::endl;
   int rc; 
   sem_wait(&write_blocking_waiter);
   while(write_requests > 0){
