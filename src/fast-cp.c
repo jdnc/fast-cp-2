@@ -10,96 +10,96 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <aio.h>
+#include <libaio.h>
+#include <pthread.h>
 #include <semaphore.h>
 #include <ftw.h>
 #include <errno.h>
 
 #define BUF_MAX 128
 #define FD_MAX 1000
+#define Q_MAX 1024
 
 static size_t buffer_size;
 static uint64_t  page_size;
 static uint64_t num_pages;
-static uint64_t num_requests;
-static sem_t blocking_waiter;
+static uint64_t read_requests;
+static uint64_t write_requests;
 static std::string src;
 static std::string dst;
+io_context_t write_context;
+io_context_t read_context;
+pthread_t read_worker, write_worker;
+pthread_mutex_t read_mutex;
+pthread_mutex_t write_mutex;
 
-void aio_write_handler(sigval_t signal);
-
-typedef struct handler_context
+typedef struct data_obj
 {
-  struct aiocb* m_aiocb;
+  struct iocb* m_aiocb;
   size_t m_offset;
   size_t m_file_size;
   int m_src_fd;
   int m_dst_fd;
-} handler_context;
+} data_obj;
 
 
-void aio_read_handler (sigval_t  sigval)
+void * read_queue(void *) 
 {
-  size_t nbytes;
-  size_t w_nbytes = 0;
-  handler_context* hctx = (handler_context*)sigval.sival_ptr;
-  if (aio_error(hctx->m_aiocb)) {
-    perror("read aio error");
-    exit(-1);
-  }
-  nbytes = aio_return(hctx->m_aiocb);
-  int i = 0;
-  void * buffer = (void *)hctx->m_aiocb->aio_buf;
-  /*w_nbytes = pwrite(hctx->m_dst_fd, buffer, nbytes, hctx->m_offset);
-  if (w_nbytes != nbytes) {
-    perror("sync write error");
-    exit(-1);
+  std::cout << "in read q" << std::endl;
+  int rc;
+  while (read_requests > 0){
+    io_event event;
+    if ((rc = io_getevents(read_context, 1, 1, &event, NULL)) < 1) {
+      perror("read getevent error");
+      exit(-1);
     }
-    sem_post(&blocking_waiter);*/
-  // now send an async write request for the destination file
-  // init aiocb struct
-  struct aiocb*  w_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
-  handler_context* w_context = (handler_context *) malloc(sizeof(handler_context));
-  bzero ((char *)w_context, sizeof(handler_context));
-  bzero ((char *)w_aiocb, sizeof(struct aiocb));
-  // context to be passed to handler
-  w_context->m_aiocb = w_aiocb;
-  w_context->m_offset = hctx->m_offset;
-  w_context->m_file_size = hctx->m_file_size;
-  w_context->m_src_fd = hctx->m_src_fd;
-  w_context->m_dst_fd = hctx->m_dst_fd;
-
-  // basic setup
-  w_aiocb->aio_fildes = hctx->m_dst_fd;
-  w_aiocb->aio_nbytes = nbytes;
-  w_aiocb->aio_offset = hctx->m_offset;
-  w_aiocb->aio_buf = buffer;
-
-  // thread callback
-  w_aiocb->aio_sigevent.sigev_notify = SIGEV_THREAD;
-  w_aiocb->aio_sigevent.sigev_notify_function = aio_write_handler;
-  w_aiocb->aio_sigevent.sigev_notify_attributes = NULL;
-  w_aiocb->aio_sigevent.sigev_value.sival_ptr = (void *)w_context;
-
-  if (aio_write(w_aiocb) < 0) {
-    perror("aio_write error");
-    exit(-1);
+    data_obj* data = (data_obj*)event.data;
+    iocb * cb = (struct iocb*)event.obj;
+    // start a corresponding write request
+    // init aiocb struct
+    struct iocb* w_iocb = (struct iocb*)malloc(sizeof(struct iocb));
+    data_obj* w_data = (data_obj *) malloc(sizeof(data_obj));
+    bzero ((char *)w_data, sizeof(data_obj));
+    bzero ((char *)w_iocb, sizeof(struct iocb));
+    // context to be passed to handler
+    w_data->m_aiocb = w_iocb;
+    w_data->m_offset = data->m_offset;
+    w_data->m_file_size = data->m_file_size;
+    w_data->m_src_fd = data->m_src_fd;
+    w_data->m_dst_fd = data->m_dst_fd;  
+    
+    io_prep_pwrite(w_iocb, data->m_dst_fd, cb->u.c.buf, cb->u.c.nbytes, data->m_offset);
+    w_iocb->data = w_data;
+    std::cout << "buffer " << std::string((char*)cb->u.c.buf) << std::endl;
+    if ((io_submit(write_context, 1, &w_iocb)) < 1) {
+      perror("write io submit error");
+      exit(-1);
+    }
+    pthread_mutex_lock(&write_mutex);
+    ++write_requests;
+    pthread_mutex_unlock(&write_mutex);
   }
-  ++num_requests;
-  sem_post(&blocking_waiter);
+  pthread_mutex_lock(&read_mutex);
+  --read_requests;
+  pthread_mutex_unlock(&read_mutex);
+  return NULL;
 }
 
-void aio_write_handler (sigval_t sigval)
+void * write_queue(void *)
 {
-  size_t nbytes;
-  handler_context* hctx = (handler_context*)sigval.sival_ptr;
-  if (aio_error(hctx->m_aiocb)) {
-    perror("write aio error");
-    exit(-1);
-  }
-  nbytes = aio_return(hctx->m_aiocb);
-  sem_post(&blocking_waiter);
-  //free(hctx->m_aiocb->aio_buf);
+  std::cout << "in write q" << std::endl;
+  int rc; 
+  while(write_requests > 0){
+    io_event event;
+    if ((rc = io_getevents(write_context, 1, 1, &event, NULL)) < 1) {
+      perror("write  getevent error");
+      exit(-1);
+    }
+   }
+   pthread_mutex_lock(&write_mutex);
+   --write_requests;
+   pthread_mutex_unlock(&write_mutex);
+   return NULL;
 }
 
 int copy_regular (const char* src_file, const char* dst_file)
@@ -145,52 +145,42 @@ int copy_regular (const char* src_file, const char* dst_file)
   }
   
   // TODO tell the kernel that we will need the input file
-  posix_fadvise(src_fd, 0, stat_buf.st_size, POSIX_FADV_WILLNEED);
+  // posix_fadvise(src_fd, 0, stat_buf.st_size, POSIX_FADV_WILLNEED);
   // more efficient space allocation via fallocate for dst file
   if (fallocate(dst_fd, 0, 0, stat_buf.st_size) < 0) {
     perror("destination file fallocate");
   }
   // decide the number of pages in the input file and malloc a buffer accordingly
-  num_pages = stat_buf.st_size / page_size + 1;
+  //num_pages = stat_buf.st_size / page_size + 1;
   buffer_size = page_size; //(num_pages < BUF_MAX) ? (num_pages * page_size) : (BUF_MAX * page_size);
   // now start sending aio read requests
-  size_t i;
-  for (i = 0; i < stat_buf.st_size; i += buffer_size) {
-    //posix_fadvise(src_fd, i, buffer_size, POSIX_FADV_SEQUENTIAL);
-    buffer_block = (void *)malloc(buffer_size);
-     if (errno == ENOMEM) {
-       perror("malloc for buffer error");
+  for (size_t i = 0; i < stat_buf.st_size; i += buffer_size) {
+     int ret  = posix_memalign((void **) &buffer_block, page_size, page_size);
+     if (ret != 0) {
+       perror("memalign for buffer error");
        exit(-1);
      }
     // init aiocb struct
-    struct aiocb* r_aiocb = (struct aiocb*)malloc(sizeof(struct aiocb));
-    handler_context* r_context = (handler_context *) malloc(sizeof(handler_context));
-    bzero ((char *)r_context, sizeof(handler_context));
-    bzero ((char *)r_aiocb, sizeof(struct aiocb));
+    struct iocb* r_iocb = (struct iocb*)malloc(sizeof(struct iocb));
+    data_obj* r_data = (data_obj *) malloc(sizeof(data_obj));
+    bzero ((char *)r_data, sizeof(data_obj));
+    bzero ((char *)r_iocb, sizeof(struct iocb));
     // context to be passed to handler
-    r_context->m_aiocb = r_aiocb;
-    r_context->m_offset = i;
-    r_context->m_file_size = stat_buf.st_size;
-    r_context->m_src_fd = src_fd;
-    r_context->m_dst_fd = dst_fd;
+    r_data->m_aiocb = r_iocb;
+    r_data->m_offset = i;
+    r_data->m_file_size = stat_buf.st_size;
+    r_data->m_src_fd = src_fd;
+    r_data->m_dst_fd = dst_fd;   
+    io_prep_pread(r_iocb, src_fd, buffer_block, buffer_size, i);
+    r_iocb->data = r_data;
     
-    // basic setup
-    r_aiocb->aio_fildes = src_fd;
-    r_aiocb->aio_nbytes = buffer_size;
-    r_aiocb->aio_offset = i;
-    r_aiocb->aio_buf = buffer_block;
-    
-    // thread callback
-    r_aiocb->aio_sigevent.sigev_notify = SIGEV_THREAD;
-    r_aiocb->aio_sigevent.sigev_notify_function = aio_read_handler;
-    r_aiocb->aio_sigevent.sigev_notify_attributes = NULL;
-    r_aiocb->aio_sigevent.sigev_value.sival_ptr = (void *)r_context;
-
-    if (aio_read(r_aiocb) < 0) {
-      perror("aio_read error");
+    if ((io_submit(read_context, 1, &r_iocb)) < 1) {
+      perror("read io submit error");
       exit(-1);
     }
-    ++num_requests;
+    pthread_mutex_lock(&read_mutex);
+    ++read_requests;
+    pthread_mutex_unlock(&read_mutex);
   } 
   return 0;
 }
@@ -236,14 +226,39 @@ std::string format_path(std::string path)
 
 int main(int argc, char * argv[])
 {
-  num_requests = 0;
-  sem_init(&blocking_waiter, 0, 0);
-  //copy_regular(argv[1], argv[2]);
+  read_requests = write_requests = 1;
   src = argv[1];
   dst = argv[2];
-  uint64_t i;
+  uint64_t i, rc;
   src = format_path(src);
   dst = format_path(dst);
+  // set up read and write notification threads
+  if ((rc = pthread_create(&read_worker, NULL, read_queue, NULL))) {
+    perror("read thread creation error");
+    exit(-1);
+  }
+  if ((rc = pthread_create(&write_worker, NULL, write_queue, NULL))) {
+    perror("write thread creation error");
+    exit(-1);
+  }
+  if ((rc = pthread_mutex_init(&read_mutex, NULL))) {
+    perror("read mutex init error");
+    exit(-1);
+  }
+  if ((rc = pthread_mutex_init(&write_mutex, NULL))) {
+    perror("write mutex creation error");
+    exit(-1);
+  }
+  bzero((char *)&read_context, sizeof(read_context));
+  bzero((char *)&write_context, sizeof(write_context));
+  if ((rc = io_queue_init(Q_MAX, &read_context))) {
+    perror("read context queue init error");
+    exit(-1);
+  }
+  if ((rc = io_queue_init(Q_MAX, &write_context))) {
+    perror("write context queue init error");
+    exit(-1);
+  }
   struct stat src_stat, dst_stat;
   if (stat(src.c_str(), &src_stat)) {
     perror("source file stat error");
@@ -303,10 +318,8 @@ int main(int argc, char * argv[])
       }
     }
   }
-  for (i = 0; i < num_requests; ++i) {
-    sem_wait(&blocking_waiter);
-  }
-  sem_destroy(&blocking_waiter);
+  pthread_join(read_worker, NULL);
+  pthread_join(write_worker, NULL);
   return 0;
 }
 
