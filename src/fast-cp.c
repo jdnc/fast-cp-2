@@ -1,6 +1,7 @@
 // TODO arrange in alphabetical order, separated by type
 #include <cstdlib>
 #include <cstdio>
+#include <atomic>
 #include <iostream>
 #include <string>
 #include <string.h>
@@ -21,7 +22,7 @@
 static size_t buffer_size;
 static uint64_t  page_size;
 static uint64_t num_pages;
-static uint64_t num_requests;
+std::atomic<unsigned long> num_requests;
 static sem_t blocking_waiter;
 static std::string src;
 static std::string dst;
