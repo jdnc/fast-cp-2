@@ -15,6 +15,8 @@
 #include <semaphore.h>
 #include <ftw.h>
 #include <errno.h>
+#include <poll.h>
+#include <sys/eventfd.h>
 
 #define BUF_MAX 128
 #define FD_MAX 1000
@@ -29,6 +31,8 @@ static std::string src;
 static std::string dst;
 io_context_t write_context;
 io_context_t read_context;
+int readfd;
+int writefd;
 pthread_t read_worker, write_worker;
 pthread_mutex_t read_mutex;
 pthread_mutex_t write_mutex;
@@ -42,12 +46,29 @@ typedef struct data_obj
   int m_dst_fd;
 } data_obj;
 
+static long waitasync(int afd, int timeo) {
+  struct pollfd pfd;
+  pfd.fd = afd;
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+  if (poll(&pfd, 1, timeo) < 0) {
+	  perror("poll");
+	  return -1;
+  }
+  if ((pfd.revents & POLLIN) == 0) {
+    perror("no results completed\n");
+    exit(-1);
+  }
+  return 1;
+}
 
 void * read_queue(void *) 
 {
   std::cout << "in read q" << std::endl;
   int rc;
+  //waitasync(readfd, -1);
   while (read_requests > 0){
+    //waitasync(readfd, -1);
     io_event event;
     if ((rc = io_getevents(read_context, 1, 1, &event, NULL)) < 1) {
       perror("read getevent error");
@@ -69,6 +90,7 @@ void * read_queue(void *)
     w_data->m_dst_fd = data->m_dst_fd;  
     
     io_prep_pwrite(w_iocb, data->m_dst_fd, cb->u.c.buf, cb->u.c.nbytes, data->m_offset);
+    //io_set_eventfd(w_iocb, writefd);
     w_iocb->data = w_data;
     std::cout << "buffer " << std::string((char*)cb->u.c.buf) << std::endl;
     if ((io_submit(write_context, 1, &w_iocb)) < 1) {
@@ -89,7 +111,9 @@ void * write_queue(void *)
 {
   std::cout << "in write q" << std::endl;
   int rc; 
+  // waitasync(writefd, -1);
   while(write_requests > 0){
+    //waitasync(writefd, -1);
     io_event event;
     if ((rc = io_getevents(write_context, 1, 1, &event, NULL)) < 1) {
       perror("write  getevent error");
@@ -170,10 +194,10 @@ int copy_regular (const char* src_file, const char* dst_file)
     r_data->m_offset = i;
     r_data->m_file_size = stat_buf.st_size;
     r_data->m_src_fd = src_fd;
-    r_data->m_dst_fd = dst_fd;   
+    r_data->m_dst_fd = dst_fd;
+    //io_set_eventfd(r_iocb, readfd);
     io_prep_pread(r_iocb, src_fd, buffer_block, buffer_size, i);
-    r_iocb->data = r_data;
-    
+    r_iocb->data = r_data;   
     if ((io_submit(read_context, 1, &r_iocb)) < 1) {
       perror("read io submit error");
       exit(-1);
@@ -229,14 +253,12 @@ int main(int argc, char * argv[])
   read_requests = write_requests = 1;
   src = argv[1];
   dst = argv[2];
+  readfd = eventfd(0, 0);
+  writefd = eventfd(0, 0);
   uint64_t i, rc;
   src = format_path(src);
   dst = format_path(dst);
   // set up read and write notification threads
-  if ((rc = pthread_create(&read_worker, NULL, read_queue, NULL))) {
-    perror("read thread creation error");
-    exit(-1);
-  }
   if ((rc = pthread_create(&write_worker, NULL, write_queue, NULL))) {
     perror("write thread creation error");
     exit(-1);
