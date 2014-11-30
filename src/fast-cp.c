@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <linux/falloc.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <libaio.h>
@@ -30,6 +31,8 @@ static std::string dst;
 io_context_t write_context;
 io_context_t read_context;
 pthread_t read_worker, write_worker;
+static sem_t read_blocking_waiter;
+static sem_t write_blocking_waiter;
 pthread_mutex_t read_mutex;
 pthread_mutex_t write_mutex;
 
@@ -47,6 +50,8 @@ void * read_queue(void *)
 {
   std::cout << "in read q" << std::endl;
   int rc;
+  int first_time = 1;
+  sem_wait(&read_blocking_waiter);
   while (read_requests > 0){
     io_event event;
     if ((rc = io_getevents(read_context, 1, 1, &event, NULL)) < 1) {
@@ -66,8 +71,7 @@ void * read_queue(void *)
     w_data->m_offset = data->m_offset;
     w_data->m_file_size = data->m_file_size;
     w_data->m_src_fd = data->m_src_fd;
-    w_data->m_dst_fd = data->m_dst_fd;  
-    
+    w_data->m_dst_fd = data->m_dst_fd;      
     io_prep_pwrite(w_iocb, data->m_dst_fd, cb->u.c.buf, cb->u.c.nbytes, data->m_offset);
     w_iocb->data = w_data;
     std::cout << "buffer " << std::string((char*)cb->u.c.buf) << std::endl;
@@ -78,10 +82,14 @@ void * read_queue(void *)
     pthread_mutex_lock(&write_mutex);
     ++write_requests;
     pthread_mutex_unlock(&write_mutex);
+    if (first_time){
+      sem_post(&write_blocking_waiter);
+      first_time = 0;
+    }
+    pthread_mutex_lock(&read_mutex);
+    --read_requests;
+    pthread_mutex_unlock(&read_mutex);
   }
-  pthread_mutex_lock(&read_mutex);
-  --read_requests;
-  pthread_mutex_unlock(&read_mutex);
   return NULL;
 }
 
@@ -89,16 +97,18 @@ void * write_queue(void *)
 {
   std::cout << "in write q" << std::endl;
   int rc; 
+  sem_wait(&write_blocking_waiter);
   while(write_requests > 0){
     io_event event;
     if ((rc = io_getevents(write_context, 1, 1, &event, NULL)) < 1) {
       perror("write  getevent error");
       exit(-1);
     }
-   }
    pthread_mutex_lock(&write_mutex);
    --write_requests;
    pthread_mutex_unlock(&write_mutex);
+
+   }
    return NULL;
 }
 
@@ -147,13 +157,14 @@ int copy_regular (const char* src_file, const char* dst_file)
   // TODO tell the kernel that we will need the input file
   // posix_fadvise(src_fd, 0, stat_buf.st_size, POSIX_FADV_WILLNEED);
   // more efficient space allocation via fallocate for dst file
-  if (fallocate(dst_fd, 0, 0, stat_buf.st_size) < 0) {
+  if (fallocate(dst_fd, FALLOC_FL_KEEP_SIZE, 0, stat_buf.st_size) < 0) {
     perror("destination file fallocate");
   }
   // decide the number of pages in the input file and malloc a buffer accordingly
   //num_pages = stat_buf.st_size / page_size + 1;
   buffer_size = page_size; //(num_pages < BUF_MAX) ? (num_pages * page_size) : (BUF_MAX * page_size);
   // now start sending aio read requests
+  int first_time = 1;
   for (size_t i = 0; i < stat_buf.st_size; i += buffer_size) {
      int ret  = posix_memalign((void **) &buffer_block, page_size, page_size);
      if (ret != 0) {
@@ -173,7 +184,6 @@ int copy_regular (const char* src_file, const char* dst_file)
     r_data->m_dst_fd = dst_fd;   
     io_prep_pread(r_iocb, src_fd, buffer_block, buffer_size, i);
     r_iocb->data = r_data;
-    
     if ((io_submit(read_context, 1, &r_iocb)) < 1) {
       perror("read io submit error");
       exit(-1);
@@ -181,6 +191,10 @@ int copy_regular (const char* src_file, const char* dst_file)
     pthread_mutex_lock(&read_mutex);
     ++read_requests;
     pthread_mutex_unlock(&read_mutex);
+    if (first_time) {
+      sem_post(&read_blocking_waiter);
+      first_time = 0;
+    }
   } 
   return 0;
 }
@@ -226,7 +240,9 @@ std::string format_path(std::string path)
 
 int main(int argc, char * argv[])
 {
-  read_requests = write_requests = 1;
+  read_requests = write_requests = 0;
+  sem_init(&read_blocking_waiter, 0, 0);
+  sem_init(&write_blocking_waiter, 0, 0);
   src = argv[1];
   dst = argv[2];
   uint64_t i, rc;
