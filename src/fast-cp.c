@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
+#include <atomic>
 #include <string>
 #include <string.h>
 #include <signal.h>
@@ -24,8 +25,8 @@
 static size_t buffer_size;
 static uint64_t  page_size;
 static uint64_t num_pages;
-static uint64_t read_requests;
-static uint64_t write_requests;
+std::atomic<unsigned long> read_requests;
+std::atomic<unsigned long> write_requests;
 static std::string src;
 static std::string dst;
 io_context_t write_context;
@@ -33,8 +34,6 @@ io_context_t read_context;
 pthread_t read_worker, write_worker;
 static sem_t read_blocking_waiter;
 static sem_t write_blocking_waiter;
-pthread_mutex_t read_mutex;
-pthread_mutex_t write_mutex;
 
 typedef struct data_obj
 {
@@ -79,16 +78,12 @@ void * read_queue(void *)
       perror("write io submit error");
       exit(-1);
     }
-    pthread_mutex_lock(&write_mutex);
     ++write_requests;
-    pthread_mutex_unlock(&write_mutex);
     if (first_time){
       sem_post(&write_blocking_waiter);
       first_time = 0;
     }
-    pthread_mutex_lock(&read_mutex);
     --read_requests;
-    pthread_mutex_unlock(&read_mutex);
   }
   return NULL;
 }
@@ -104,10 +99,7 @@ void * write_queue(void *)
       perror("write  getevent error");
       exit(-1);
     }
-   pthread_mutex_lock(&write_mutex);
    --write_requests;
-   pthread_mutex_unlock(&write_mutex);
-
    }
    return NULL;
 }
@@ -188,9 +180,7 @@ int copy_regular (const char* src_file, const char* dst_file)
       perror("read io submit error");
       exit(-1);
     }
-    pthread_mutex_lock(&read_mutex);
     ++read_requests;
-    pthread_mutex_unlock(&read_mutex);
     if (first_time) {
       sem_post(&read_blocking_waiter);
       first_time = 0;
@@ -255,14 +245,6 @@ int main(int argc, char * argv[])
   }
   if ((rc = pthread_create(&write_worker, NULL, write_queue, NULL))) {
     perror("write thread creation error");
-    exit(-1);
-  }
-  if ((rc = pthread_mutex_init(&read_mutex, NULL))) {
-    perror("read mutex init error");
-    exit(-1);
-  }
-  if ((rc = pthread_mutex_init(&write_mutex, NULL))) {
-    perror("write mutex creation error");
     exit(-1);
   }
   bzero((char *)&read_context, sizeof(read_context));
