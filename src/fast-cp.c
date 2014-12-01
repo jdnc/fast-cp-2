@@ -11,10 +11,13 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <aio.h>
 #include <semaphore.h>
 #include <ftw.h>
 #include <errno.h>
+#include <time.h>
+
 
 #define BUF_MAX 128
 #define FD_MAX 1000
@@ -237,7 +240,9 @@ std::string format_path(std::string path)
 
 int main(int argc, char * argv[])
 {
+  struct timespec tv1, tv2;
   num_requests = 0;
+  clock_gettime(CLOCK_MONOTONIC, &tv1);
   sem_init(&blocking_waiter, 0, 0);
   //copy_regular(argv[1], argv[2]);
   src = argv[1];
@@ -308,6 +313,9 @@ int main(int argc, char * argv[])
     sem_wait(&blocking_waiter);
   }
   sem_destroy(&blocking_waiter);
+  clock_gettime(CLOCK_MONOTONIC, &tv2);
+  uint64_t tv = (tv2.tv_sec - tv1.tv_sec) * 1000000000+ tv2.tv_nsec -tv1.tv_nsec;
+  printf("completion time = %ld.%06ld s\n", tv / 1000000000, tv % 1000000000);
   return 0;
 }
 
