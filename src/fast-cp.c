@@ -22,7 +22,7 @@
 
 #define BUF_MAX 128
 #define FD_MAX 1000
-#define Q_MAX 1024
+#define Q_MAX 65536
 
 static size_t buffer_size;
 static uint64_t  page_size;
