@@ -211,6 +211,10 @@ int tree_walk1(const char* fpath,
   if (typeflag == FTW_F) {
     total_bytes += sb->st_size; 
   }
+  else if (typeflag == FTW_D) {
+   std::string new_dst_path = dst + split_filename(std::string(fpath), ftwbuf->level);
+  copy_regular(fpath, new_dst_path.c_str());
+  }
   return 0;
 }
 
@@ -221,9 +225,11 @@ int tree_walk2(const char* fpath,
 {
   if (ftwbuf->level == 0) {
     return 0;
-  }  
-  std::string new_dst_path = dst + split_filename(std::string(fpath), ftwbuf->level);
-  copy_regular(fpath, new_dst_path.c_str());
+  }
+  if (FTW_F == typeflag) {
+    std::string new_dst_path = dst + split_filename(std::string(fpath), ftwbuf->level);
+    copy_regular(fpath, new_dst_path.c_str());
+  }
   return 0;
 }
 
