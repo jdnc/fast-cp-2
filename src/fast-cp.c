@@ -6,12 +6,14 @@
 #include <string>
 #include <string.h>
 #include <signal.h>
+#include <time.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <linux/falloc.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <libaio.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -249,6 +251,8 @@ int main(int argc, char * argv[])
 {
   num_requests = 0;
   total_bytes = 0;
+  struct timespec tv1, tv2;
+  clock_gettime(CLOCK_MONOTONIC, &tv1);
   page_size = getpagesize();
   buffer_size = page_size;
   src = argv[1];
@@ -364,6 +368,9 @@ int main(int argc, char * argv[])
   }
   pthread_join(read_worker, NULL);
   pthread_join(write_worker, NULL);
+  clock_gettime(CLOCK_MONOTONIC, &tv2);
+  uint64_t tv = (tv2.tv_sec - tv1.tv_sec) * 1000000000+ tv2.tv_nsec -tv1.tv_nsec;
+  printf("completion time = %ld.%06ld s\n", tv / 1000000000, tv % 1000000000);
   return 0;
 }
 
