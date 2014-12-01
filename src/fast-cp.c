@@ -131,12 +131,12 @@ int copy_regular (const char* src_file, const char* dst_file)
     return 0;
   }
   // open the source file for reading
-  if ((src_fd = open(src_file, O_RDONLY | O_NONBLOCK)) < 0) {
+  if ((src_fd = open(src_file, O_RDONLY | O_DIRECT)) < 0) {
     perror("source file open error");
     exit(-1);
   }
   // open the destination file for writing
-  if ((dst_fd = open(dst_file, O_WRONLY| O_CREAT, stat_buf.st_mode)) < 0) {
+  if ((dst_fd = open(dst_file, O_WRONLY| O_CREAT | O_DIRECT, stat_buf.st_mode)) < 0) {
     //std::cout << "file " <<dst_file<<std::endl;
     perror("destination file open error");
     exit(-1);
