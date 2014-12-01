@@ -25,15 +25,15 @@
 static size_t buffer_size;
 static uint64_t  page_size;
 static uint64_t num_pages;
-std::atomic<unsigned long> read_requests;
-std::atomic<unsigned long> write_requests;
+static uint64_t total_bytes;
+std::atomic<unsigned long> num_requests;
 static std::string src;
 static std::string dst;
 io_context_t write_context;
 io_context_t read_context;
 pthread_t read_worker, write_worker;
-static sem_t read_blocking_waiter;
-static sem_t write_blocking_waiter;
+sem_t read_blocking_waiter;
+sem_t write_blocking_waiter;
 
 typedef struct data_obj
 {
@@ -45,13 +45,22 @@ typedef struct data_obj
 } data_obj;
 
 
+void set_num_requests(void) {
+  if (total_bytes == 0 || buffer_size == 0)
+    num_requests  = 0;
+  else {
+    num_requests = total_bytes / buffer_size ;
+    if (total_bytes % buffer_size != 0)
+      num_requests++;
+  }    
+}
+
 void * read_queue(void *) 
 {
+  sem_wait(&read_blocking_waiter);
   //std::cout << "in read q" << std::endl;
   int rc;
-  int first_time = 1;
-  sem_wait(&read_blocking_waiter);
-  while (read_requests > 0){
+  for (uint64_t i = 0; i < num_requests; ++i){
     io_event event;
     if ((rc = io_getevents(read_context, 1, 1, &event, NULL)) < 1) {
       perror("read getevent error");
@@ -78,28 +87,21 @@ void * read_queue(void *)
       perror("write io submit error");
       exit(-1);
     }
-    ++write_requests;
-    if (first_time){
-      sem_post(&write_blocking_waiter);
-      first_time = 0;
-    }
-    --read_requests;
   }
   return NULL;
 }
 
 void * write_queue(void *)
 {
+   sem_wait(&write_blocking_waiter);
   //std::cout << "in write q" << std::endl;
   int rc; 
-  sem_wait(&write_blocking_waiter);
-  while(write_requests > 0){
+  for(uint64_t i = 0; i < num_requests; ++i){
     io_event event;
     if ((rc = io_getevents(write_context, 1, 1, &event, NULL)) < 1) {
       perror("write  getevent error");
       exit(-1);
     }
-   --write_requests;
    }
    return NULL;
 }
@@ -127,12 +129,12 @@ int copy_regular (const char* src_file, const char* dst_file)
     return 0;
   }
   // open the source file for reading
-  if ((src_fd = open(src_file, O_RDONLY | O_DIRECT)) < 0) {
+  if ((src_fd = open(src_file, O_RDONLY | O_NONBLOCK)) < 0) {
     perror("source file open error");
     exit(-1);
   }
   // open the destination file for writing
-  if ((dst_fd = open(dst_file, O_WRONLY| O_CREAT | O_DIRECT, stat_buf.st_mode)) < 0) {
+  if ((dst_fd = open(dst_file, O_WRONLY| O_CREAT, stat_buf.st_mode)) < 0) {
     //std::cout << "file " <<dst_file<<std::endl;
     perror("destination file open error");
     exit(-1);
@@ -180,11 +182,6 @@ int copy_regular (const char* src_file, const char* dst_file)
       perror("read io submit error");
       exit(-1);
     }
-    ++read_requests;
-    if (first_time) {
-      sem_post(&read_blocking_waiter);
-      first_time = 0;
-    }
   } 
   return 0;
 }
@@ -203,7 +200,7 @@ std::string split_filename(std::string fname, int depth)
   return fname.substr(pos);
 }
 
-int tree_walk (const char* fpath, 
+int tree_walk1(const char* fpath, 
 	       const struct stat* sb, 
 	       int typeflag,
 	       struct FTW* ftwbuf)
@@ -211,6 +208,20 @@ int tree_walk (const char* fpath,
   if (ftwbuf->level == 0) {
     return 0;
   }
+  if (typeflag == FTW_F) {
+    total_bytes += sb->st_size; 
+  }
+  return 0;
+}
+
+int tree_walk2(const char* fpath, 
+	       const struct stat* sb, 
+	       int typeflag,
+	       struct FTW* ftwbuf)
+{
+  if (ftwbuf->level == 0) {
+    return 0;
+  }  
   std::string new_dst_path = dst + split_filename(std::string(fpath), ftwbuf->level);
   copy_regular(fpath, new_dst_path.c_str());
   return 0;
@@ -230,14 +241,17 @@ std::string format_path(std::string path)
 
 int main(int argc, char * argv[])
 {
-  read_requests = write_requests = 0;
-  sem_init(&read_blocking_waiter, 0, 0);
-  sem_init(&write_blocking_waiter, 0, 0);
+  num_requests = 0;
+  total_bytes = 0;
+  page_size = getpagesize();
+  buffer_size = page_size;
   src = argv[1];
   dst = argv[2];
   uint64_t i, rc;
   src = format_path(src);
   dst = format_path(dst);
+  sem_init(&read_blocking_waiter, 0, 0);
+  sem_init(&write_blocking_waiter, 0, 0);
   // set up read and write notification threads
   if ((rc = pthread_create(&read_worker, NULL, read_queue, NULL))) {
     perror("read thread creation error");
@@ -276,12 +290,23 @@ int main(int argc, char * argv[])
 	exit(-1);
       }
       // traverse the entire tree and copy files or directories 
-      if (nftw(src.c_str(), tree_walk, FD_MAX, FTW_PHYS)) {
+      if (nftw(src.c_str(), tree_walk1, FD_MAX, FTW_PHYS)) {
 	perror("nftw traversal error");
 	exit(-1);
-      }     
+      }
+      set_num_requests();
+      sem_post(&read_blocking_waiter);
+      sem_post(&write_blocking_waiter);
+      if (nftw(src.c_str(), tree_walk2, FD_MAX, FTW_PHYS)) {
+	perror("nftw traversal error");
+	exit(-1);
+      }
     }
     else { // is a file
+      total_bytes = src_stat.st_size;
+      set_num_requests();
+      sem_post(&read_blocking_waiter);
+      sem_post(&write_blocking_waiter);
       copy_regular(src.c_str(), dst.c_str());
     }
   }
@@ -299,7 +324,14 @@ int main(int argc, char * argv[])
 	perror("destination mkdir failed");
 	exit(-1);
       }
-      if (nftw(src.c_str(), tree_walk, FD_MAX, FTW_PHYS)) {
+      if (nftw(src.c_str(), tree_walk1, FD_MAX, FTW_PHYS)) {
+	perror("nftw traversal error");
+	exit(-1);
+      }
+      set_num_requests();
+      sem_post(&read_blocking_waiter);
+      sem_post(&write_blocking_waiter);
+      if (nftw(src.c_str(), tree_walk2, FD_MAX, FTW_PHYS)) {
 	perror("nftw traversal error");
 	exit(-1);
       }
@@ -307,11 +339,19 @@ int main(int argc, char * argv[])
     else {
       if (!S_ISDIR(dst_stat.st_mode)) {
 	// file -> file overwrite
-	copy_regular(src.c_str(), dst.c_str());
+      total_bytes = src_stat.st_size;
+      set_num_requests();
+      sem_post(&read_blocking_waiter);
+      sem_post(&write_blocking_waiter);
+      copy_regular(src.c_str(), dst.c_str());
       }
       else {
 	// file -> dir
 	dst.append(split_filename(src, 1));
+        total_bytes = src_stat.st_size;
+	set_num_requests();
+	sem_post(&read_blocking_waiter);
+	sem_post(&write_blocking_waiter);
 	copy_regular(src.c_str(), dst.c_str());
       }
     }
