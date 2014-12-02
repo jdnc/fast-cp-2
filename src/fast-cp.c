@@ -249,6 +249,10 @@ std::string format_path(std::string path)
 
 int main(int argc, char * argv[])
 {
+  if (argc != 3) {
+    printf("usage : %s <source> <destination>\n.", argv[0]);
+    return 0;
+  }
   num_requests = 0;
   total_bytes = 0;
   struct timespec tv1, tv2;
